@@ -25,7 +25,7 @@ import (
 const StatusOK = 200 // RFC 9110, 15.3.1
 
 // userAgent 未显式指定 User-Agent 时的默认请求头
-const userAgent = "GoHttpClient/1.0.0"
+const userAgent = "GoHttpClient/1.0.1"
 
 // DefaultTimeout 未通过 Timeout 显式指定时的单请求超时
 const DefaultTimeout = 10 * time.Second
