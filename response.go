@@ -14,13 +14,14 @@ import (
 // Response 一次 HTTP 请求的完整响应。
 // Body 是读取完成的响应体原文，已自动关闭底层连接。
 type Response struct {
+	Error      error
 	IsWrong    bool                // 响应是否异常：状态码不在允许列表内为 true（默认只允许 200，见 Allow 选项）
 	Url        string              // 目标 URL
 	Method     string              // 请求方式，post get
 	ReqHeaders map[string][]string //发送出去的请求头
 	StatusCode int                 // HTTP 状态码，200 表示正常
 	Status     string              // 状态文本，如 "200 OK"
-	Header     http.Header         // 收到的响应头
+	ResHeaders http.Header         // 收到的响应头
 	Body       []byte              // 响应体原文
 	Decode     string              // 响应体解析方式：DecodeJSON / DecodeXML（由请求选项 Decode 或响应头推断）
 	Start      int64               // 请求开始时间（Unix 毫秒）
@@ -49,13 +50,14 @@ func (resp *Response) DebugInfo() string {
 		RemoteIP   string              `json:"remoteIP,omitempty"`
 		StatusCode int                 `json:"statusCode"`
 		Status     string              `json:"status,omitempty"`
-		ReqHeaders map[string][]string `json:"headers,omitempty"`
-		Header     map[string][]string `json:"header,omitempty"`
+		ReqHeaders map[string][]string `json:"reqHeaders,omitempty"`
+		ResHeaders map[string][]string `json:"resHeaders,omitempty"`
 		Body       string              `json:"body,omitempty"`
 		BodySize   int                 `json:"bodySize,omitempty"`
 		Decode     string              `json:"decode,omitempty"`
 		Start      string              `json:"start,omitempty"`
 		Used       string              `json:"used,omitempty"`
+		UsedMs     int64               `json:"usedMs,omitempty"`
 	}{
 		IsWrong:    resp.IsWrong,
 		Method:     resp.Method,
@@ -64,16 +66,17 @@ func (resp *Response) DebugInfo() string {
 		StatusCode: resp.StatusCode,
 		Status:     resp.Status,
 		ReqHeaders: resp.ReqHeaders,
-		Header:     resp.Header,
+		ResHeaders: resp.ResHeaders,
 		Body:       string(resp.Body),
 		BodySize:   len(resp.Body),
 		Decode:     resp.Decode,
 	}
 	if resp.Start > 0 {
-		view.Start = time.UnixMilli(resp.Start).Format("2006-01-02 15:04:05.000000")
+		view.Start = time.UnixMilli(resp.Start).Format("2006-01-02 15:04:05.000")
 	}
 	if resp.Used > 0 {
 		view.Used = resp.Used.String()
+		view.UsedMs = resp.Used.Milliseconds()
 	}
 
 	var buffer bytes.Buffer

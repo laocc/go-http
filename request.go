@@ -13,8 +13,20 @@ import (
 	"time"
 )
 
-// WithClient 指定本次请求使用的底层 http.Client（默认 DefaultClient）
-func WithClient(client *http.Client) Option {
+// Get 发起 GET 请求（通用出口的便捷封装）
+func Get(rawURL string, optionList ...Option) *Response {
+	return doRequest(http.MethodGet, rawURL, optionList...)
+}
+
+// Post 发起 POST 请求（通用出口的便捷封装）
+func Post(rawURL string, optionList ...Option) *Response {
+	return doRequest(http.MethodPost, rawURL, optionList...)
+}
+
+// WithClient 指定本次请求使用的客户端构建器（默认 DefaultClient）。
+// 这里只保存构建器，真正的 http.Client 在发请求前才 Build（见 doRequest），
+// 且 Build 结果会被缓存，同一份配置只创建一次底层客户端，连接池因此得以复用。
+func WithClient(client *Client) Option {
 	return func(cfg *options) {
 		if client != nil {
 			cfg.client = client
@@ -31,14 +43,17 @@ func WithContext(ctx context.Context) Option {
 	}
 }
 
-// WithQuery 追加 URL 查询参数（会合并到 URL 已有的 QueryString 中）
-func WithQuery(params map[string]string) Option {
+// WithQuery 追加 URL 查询参数（会合并到 URL 已有的 QueryString 中）。
+// 值支持任意类型，内部统一转成字符串；推荐配合 Map 使用：
+//
+//	WithQuery(Map("page", 1, "size", 20))
+func WithQuery(params map[string]interface{}) Option {
 	return func(cfg *options) {
 		if cfg.query == nil {
 			cfg.query = make(map[string]string, len(params))
 		}
 		for key, value := range params {
-			cfg.query[key] = value
+			cfg.query[key] = valueText(value)
 		}
 	}
 }
@@ -55,20 +70,6 @@ func Timeout(requestTimeout time.Duration) Option {
 // resolveClientCache 定向 IP 的客户端缓存（key 为「底层客户端指针|ip:port」）。
 // 避免每次请求都克隆一个 Transport，导致连接池无法复用、空闲连接堆积。
 var resolveClientCache sync.Map
-
-// Debug 指定本次请求的日志输出方式（默认不记录）。
-// 注入回调后，每次请求完成或失败都会触发回调：title 为日志标题，
-// args 为记录内容（方法/URL/请求头/请求体/状态码/响应内容/耗时/错误等），
-// 便于把请求日志接到自己的日志体系：
-//
-//	http.Post(url, http.WithBody(body), http.Debug(func(title string, args ...any) {
-//		log.Println(title, args)
-//	}))
-func Debug(logFunc LogFunc) Option {
-	return func(cfg *options) {
-		cfg.logCall = logFunc
-	}
-}
 
 // Host 强制本次请求连到指定 IP（等价 PHP cURL 的 CURLOPT_RESOLVE：
 // $cOption[CURLOPT_RESOLVE] = ["域名:端口:IP"]）。
@@ -163,14 +164,31 @@ func Header(name, value string) Option {
 	}
 }
 
-// Headers 批量设置请求头（与 Header 合并，重复键由调用顺序决定）
-func Headers(headers map[string]string) Option {
+// UserAgent 指定本次请求的 User-Agent，覆盖 http.go 里的默认值 userAgent。
+// 传空字符串时保持默认，不会把请求头置空。
+func UserAgent(value string) Option {
+	return func(cfg *options) {
+		if value == "" {
+			return
+		}
+		if cfg.headers == nil {
+			cfg.headers = make(map[string]string)
+		}
+		cfg.headers["User-Agent"] = value
+	}
+}
+
+// Headers 批量设置请求头（与 Header 合并，重复键由调用顺序决定）。
+// 值支持任意类型，内部统一转成字符串；推荐配合 Map 使用：
+//
+//	Headers(Map("X-Token", "abc", "Accept", "application/json"))
+func Headers(headers map[string]interface{}) Option {
 	return func(cfg *options) {
 		if cfg.headers == nil {
 			cfg.headers = make(map[string]string, len(headers))
 		}
 		for name, value := range headers {
-			cfg.headers[name] = value
+			cfg.headers[name] = valueText(value)
 		}
 	}
 }
@@ -190,7 +208,7 @@ func ContentType(contentType string) Option {
 //	response.Json(&result)   // 此处实际按 XML 解析
 func Decode(decode string) Option {
 	return func(cfg *options) {
-		if decode != "" {
+		if decode == DecodeJSON || decode == DecodeXML {
 			cfg.decode = decode
 		}
 	}
@@ -244,7 +262,7 @@ func WithJSON(body any) Option {
 	}
 }
 
-// WithForm 把 map[string]string / url.Values 编码为表单体，
+// WithForm 把 map[string]interface{} / map[string]string / url.Values 编码为表单体，
 // 并自动设置 Content-Type: application/x-www-form-urlencoded
 func WithForm(form any) Option {
 	return func(cfg *options) {
@@ -252,6 +270,10 @@ func WithForm(form any) Option {
 		switch value := form.(type) {
 		case url.Values:
 			formValues = value
+		case map[string]interface{}:
+			for key, item := range value {
+				formValues.Set(key, valueText(item))
+			}
 		case map[string]string:
 			for key, item := range value {
 				formValues.Set(key, item)
@@ -265,20 +287,10 @@ func WithForm(form any) Option {
 		case nil:
 			return
 		default:
-			cfg.encodeErr = fmt.Errorf("表单请求体只支持 map[string]string / url.Values，收到 %T", form)
+			cfg.encodeErr = fmt.Errorf("表单请求体只支持 map[string]interface{} / map[string]string / url.Values，收到 %T", form)
 			return
 		}
 		cfg.body = []byte(formValues.Encode())
-		cfg.contentType = "application/x-www-form-urlencoded;charset=UTF-8"
+		cfg.contentType = FormContentType
 	}
-}
-
-// Get 发起 GET 请求（通用出口的便捷封装）
-func Get(rawURL string, optionList ...Option) (*Response, error) {
-	return doRequest(http.MethodGet, rawURL, optionList...)
-}
-
-// Post 发起 POST 请求（通用出口的便捷封装）
-func Post(rawURL string, optionList ...Option) (*Response, error) {
-	return doRequest(http.MethodPost, rawURL, optionList...)
 }

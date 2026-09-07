@@ -9,7 +9,6 @@ package http
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,7 +24,7 @@ import (
 const StatusOK = 200 // RFC 9110, 15.3.1
 
 // userAgent 未显式指定 User-Agent 时的默认请求头
-const userAgent = "GoHttpClient/1.0.1"
+const userAgent = "GoHttpClient/0.1.5"
 
 // DefaultTimeout 未通过 Timeout 显式指定时的单请求超时
 const DefaultTimeout = 10 * time.Second
@@ -33,6 +32,7 @@ const DefaultTimeout = 10 * time.Second
 // DefaultContentType 请求体非空且未通过 ContentType 显式指定时的默认 Content-Type。
 // 多数业务接口以 JSON 为主，故默认按 JSON 处理；表单等特殊场景用 WithForm 或 ContentType 覆盖。
 const DefaultContentType = "application/json;charset=UTF-8"
+const FormContentType = "application/x-www-form-urlencoded;charset=UTF-8"
 
 // 响应体的解析方式（对应 Decode 选项与 Response.Json）。
 // 少数接口返回 XML：请求时传 Decode(DecodeXML)，Response.Json 会改用 XML 解析。
@@ -45,17 +45,17 @@ const (
 // 少量接口用 204/201 等表示成功，可用 Allow(204) 在默认基础上追加，见 Response.IsWrong。
 var allowCode = []int{StatusOK}
 
-// logHeaderLimit 日志里响应头 JSON 的最大长度；超出部分截断，
-// 避免目标端返回大量响应头（Set-Cookie、链路追踪头等）把调试日志撑得过长。
-const logHeaderLimit = 1000
-
-// DefaultClient 所有对外请求共用的底层客户端（连接与连接池被复用）。
+// DefaultClient 所有对外请求共用的默认客户端构建器（连接与连接池被复用）。
+// 需要自定义连接池、代理、TLS 等时，替换成 NewClient() 链式配置后的构建器：
+//
+//	http.DefaultClient = http.NewClient().MaxIdleConnsPerHost(50).IdleConnTimeout(45 * time.Second)
+//
 // 超时/取消通过每次请求的 context 控制，可逐请求单独指定；也可用 WithClient 临时替换。
-var DefaultClient = &http.Client{}
+var DefaultClient = NewClient()
 
 // options 一次请求的配置，由各 Option 填充
 type options struct {
-	client      *http.Client
+	client      *Client // 客户端构建器，发请求前才 Build 出底层 http.Client
 	ctx         context.Context
 	timeout     time.Duration
 	headers     map[string]string
@@ -66,89 +66,11 @@ type options struct {
 	port        int64        // 与 host 配套的目标端口；<=0 时沿用 URL 原端口
 	decode      string       // 响应体解析方式，见 DecodeJSON / DecodeXML；为空表示按响应头推断，默认 JSON
 	allowCodes  map[int]bool // 视为「正常」的状态码，默认含 allowCode，可用 Allow 追加
-	logCall     LogFunc      // 日志回调，见 Debug 选项；为 nil 时本次请求不记录日志
 	encodeErr   error        // 请求体编码阶段的错误（Option 内部无法抛错，暂存后由 doRequest 统一返回）
 }
 
 // Option 请求配置项，通过函数方式追加配置
 type Option func(*options)
-
-// LogFunc 请求日志回调：title 为日志标题，args 为要记录的内容。
-// 通过 Debug 选项注入；未注入时本次请求不记录日志。
-type LogFunc func(title string, args ...any)
-
-// record 记录一条请求日志：通过 Debug 注入回调时调用之，未注入则不记录。
-func (cfg *options) record(title string, args ...any) {
-	if cfg.logCall != nil {
-		cfg.logCall(title, args...)
-	}
-}
-
-// requestInfo 一次对外请求的调试摘要，供 doRequest 各分支在 return 前记录：
-// 请求侧固定含 Method/Url/Headers/Body（发送的数据）；
-// 已经发出请求后用 withResponse 补上 StatusCode/ResponseHeader/RawResponse（收到的原始响应内容）。
-type requestInfo struct {
-	Method         string            `json:"method"`
-	Url            string            `json:"url"`
-	Headers        map[string]string `json:"headers,omitempty"`
-	Body           string            `json:"body,omitempty"`     // 发送的数据原文
-	RemoteIP       string            `json:"remoteIP,omitempty"` // 目标服务器的 IP（httptrace 捕获）
-	StatusCode     int               `json:"statusCode,omitempty"`
-	ResponseHeader string            `json:"responseHeader,omitempty"` // 响应头的紧凑 JSON，超长会截断（见 logHeaderLimit）
-	RawResponse    string            `json:"rawResponse,omitempty"`    // 收到的响应体原文
-	Used           string            `json:"used,omitempty"`           // 请求耗时
-	Error          string            `json:"error,omitempty"`          // 失败原因（成功时为空）
-}
-
-// newRequestInfo 组装请求侧摘要（method 为空按 GET 记）
-func newRequestInfo(method string, requestURL string, cfg *options) *requestInfo {
-	if method == "" {
-		method = http.MethodGet
-	}
-	info := &requestInfo{Method: method, Url: requestURL}
-	if cfg == nil {
-		return info
-	}
-	if len(cfg.headers) > 0 {
-		info.Headers = cfg.headers
-	}
-	if len(cfg.body) > 0 {
-		info.Body = string(cfg.body)
-	}
-	return info
-}
-
-// withResponse 补上已收到的响应信息（状态码、响应头、原始响应体、耗时）
-func (info *requestInfo) withResponse(result *Response) *requestInfo {
-	if info == nil || result == nil {
-		return info
-	}
-	info.RemoteIP = result.RemoteIP
-	info.StatusCode = result.StatusCode
-	info.ResponseHeader = headerJSON(result.Header)
-	info.RawResponse = result.Html // 原始响应内容（[]byte 直接 JSON 会变 base64，这里按文本记）
-	info.Used = result.Used.String()
-	return info
-}
-
-// headerJSON 把响应头序列化成紧凑 JSON 文本；长度超过 logHeaderLimit 时截断并标注完整长度。
-// 序列化失败时降级为 fmt.Sprint，保证日志仍能记到内容。
-func headerJSON(header http.Header) string {
-	if len(header) == 0 {
-		return ""
-	}
-	headerBytes, marshalErr := json.Marshal(header)
-	if marshalErr != nil {
-		return fmt.Sprint(header)
-	}
-	headerText := string(headerBytes)
-	// 按字符（rune）截断，避免把中文等多字节字符切成半个导致乱码
-	headerRunes := []rune(headerText)
-	if len(headerRunes) <= logHeaderLimit {
-		return headerText
-	}
-	return string(headerRunes[:logHeaderLimit]) + fmt.Sprintf("...(已截断，完整长度 %d 字符)", len(headerRunes))
-}
 
 // ipFromAddr 从 "1.2.3.4:443" 形式的地址里取出 IP 部分；拿不到时退回原始地址文本。
 func ipFromAddr(addr net.Addr) string {
@@ -165,21 +87,12 @@ func ipFromAddr(addr net.Addr) string {
 	return host
 }
 
-// withError 附加上错误信息
-func (info *requestInfo) withError(requestErr error) *requestInfo {
-	if info == nil || requestErr == nil {
-		return info
-	}
-	info.Error = requestErr.Error()
-	return info
-}
-
 // doRequest 发起一次 HTTP 请求（通用出口，Get/Post 均为它的便捷封装）。
 // method 为 GET/POST/PUT/DELETE 等；rawURL 可直接携带 QueryString。
 // 返回 *Response（出错时也可能有值，含已解析的状态），以及可能发生的错误：
 //   - 请求失败/超时错误：可用 IsTimeout 判断是否超时；
 //   - 响应体读取失败等。
-func doRequest(method string, rawURL string, optionList ...Option) (*Response, error) {
+func doRequest(method string, rawURL string, optionList ...Option) *Response {
 	cfg := options{
 		ctx:     context.Background(),
 		timeout: DefaultTimeout,
@@ -199,8 +112,7 @@ func doRequest(method string, rawURL string, optionList ...Option) (*Response, e
 	}
 
 	if cfg.encodeErr != nil {
-		cfg.record("HttpRequestError: 请求体编码失败", newRequestInfo(method, rawURL, &cfg).withError(cfg.encodeErr))
-		return nil, cfg.encodeErr
+		return &Response{Error: cfg.encodeErr}
 	}
 
 	// 有请求体但未显式指定 Content-Type 时，按默认 JSON 发送
@@ -212,8 +124,7 @@ func doRequest(method string, rawURL string, optionList ...Option) (*Response, e
 	parsedURL, urlErr := url.Parse(rawURL)
 	if urlErr != nil {
 		requestErr := fmt.Errorf("URL 格式错误 %q: %v", rawURL, urlErr)
-		cfg.record("HttpRequestError: URL 格式错误", newRequestInfo(method, rawURL, &cfg).withError(requestErr))
-		return nil, requestErr
+		return &Response{Error: requestErr}
 	}
 	if len(cfg.query) > 0 {
 		queryValues := parsedURL.Query()
@@ -253,8 +164,7 @@ func doRequest(method string, rawURL string, optionList ...Option) (*Response, e
 	request, reqErr := http.NewRequestWithContext(requestContext, method, reqUrl, requestBody)
 	if reqErr != nil {
 		requestErr := fmt.Errorf("创建请求失败: %v", reqErr)
-		cfg.record("HttpRequestError: 创建请求失败", newRequestInfo(method, reqUrl, &cfg).withError(requestErr))
-		return nil, requestErr
+		return &Response{Error: requestErr}
 	}
 
 	// 4. 请求头（Host 头需单独设置到 request.Host，直接放 Header 会被 Go 忽略）
@@ -269,14 +179,15 @@ func doRequest(method string, rawURL string, optionList ...Option) (*Response, e
 		request.Header.Set("Content-Type", cfg.contentType)
 	}
 
-	// 5. 发送并读取响应
-	client := DefaultClient
+	// 5. 发送并读取响应：此处才真正创建（或复用已缓存的）底层 http.Client
+	clientBuilder := DefaultClient
 	if cfg.client != nil {
-		client = cfg.client
+		clientBuilder = cfg.client
 	}
+	requestClient := clientBuilder.Build()
 	// 指定了目标 IP 时换用定向解析的客户端（等价 cURL CURLOPT_RESOLVE）
 	if cfg.host != "" {
-		client = resolveClient(client, cfg.host, cfg.port)
+		requestClient = resolveClient(requestClient, cfg.host, cfg.port)
 	}
 	result := &Response{
 		Start:      time.Now().UnixMilli(),
@@ -285,7 +196,7 @@ func doRequest(method string, rawURL string, optionList ...Option) (*Response, e
 		Method:     method,
 		ReqHeaders: request.Header,
 	}
-	response, doErr := client.Do(request)
+	response, doErr := requestClient.Do(request)
 	result.Used = time.Since(time.UnixMilli(result.Start))
 	if connectedIP, hasIP := remoteIP.Load().(string); hasIP {
 		result.RemoteIP = connectedIP
@@ -297,14 +208,14 @@ func doRequest(method string, rawURL string, optionList ...Option) (*Response, e
 			result.StatusCode = response.StatusCode
 			result.IsWrong = !result.allow(result.StatusCode)
 			result.Status = response.Status
-			result.Header = response.Header
+			result.ResHeaders = response.Header
 			if response.Body != nil {
 				_ = response.Body.Close()
 			}
 		}
 		requestErr := classifyError(doErr)
-		cfg.record("HttpRequestError: 请求发送失败", newRequestInfo(method, reqUrl, &cfg).withResponse(result).withError(requestErr))
-		return result, requestErr
+		result.Error = requestErr
+		return result
 	}
 	// 正常路径：响应体读完后即关闭，Response.Body 是已读完的字节，调用方无需再关。
 	defer func(body io.ReadCloser) {
@@ -314,7 +225,7 @@ func doRequest(method string, rawURL string, optionList ...Option) (*Response, e
 	result.StatusCode = response.StatusCode
 	result.IsWrong = !result.allow(result.StatusCode) // 状态码不在允许列表内（默认只 200，Allow 可追加）即视为异常
 	result.Status = response.Status
-	result.Header = response.Header
+	result.ResHeaders = response.Header
 	// 解析方式：优先取 Decode 选项；未指定时按响应头 Content-Type 推断（application/xml、text/xml 等）
 	result.Decode = cfg.decode
 	if result.Decode == "" {
@@ -326,32 +237,60 @@ func doRequest(method string, rawURL string, optionList ...Option) (*Response, e
 	bodyBytes, readErr := io.ReadAll(response.Body)
 	if readErr != nil {
 		requestErr := fmt.Errorf("读取响应失败: %v", readErr)
-		cfg.record("HttpRequestError: 读取响应失败", newRequestInfo(method, reqUrl, &cfg).withResponse(result).withError(requestErr))
-		return result, requestErr
+		result.Error = requestErr
+		return result
 	}
 	result.Body = bodyBytes
-	result.Html = string(bodyBytes)
 
-	// 完整信息：请求（URL/请求头/发送的数据）+ 响应（状态码/响应头/原始响应内容/耗时）
-	cfg.record("HttpResponse", newRequestInfo(method, reqUrl, &cfg).withResponse(result))
+	return result
+}
 
-	return result, nil
+// Map 快速构造 map[string]interface{}，省去逐个写类型的麻烦。
+// 按「键、值」成对传入，键不是字符串时该对会被忽略（奇数个参数时最后一项忽略）：
+//
+//	WithQuery(Map("page", 1, "size", 20))              // map[page:1 size:20]
+//	Headers(Map("X-Token", "abc", "Accept", "json"))   // map[X-Token:abc Accept:json]
+//	WithForm(Map("user", "tom", "pass", "123456"))     // 表单体
+func Map(pairs ...interface{}) map[string]interface{} {
+	params := make(map[string]interface{}, len(pairs)/2)
+	for index := 0; index < len(pairs)-1; index += 2 {
+		field, ok := pairs[index].(string)
+		if !ok {
+			continue
+		}
+		params[field] = pairs[index+1]
+	}
+	return params
+}
+
+// valueText 把 Map 传入的任意类型值转成字符串，nil 转为空字符串。
+// 供 WithQuery / Headers / WithForm 等接受 map[string]interface{} 的选项使用。
+func valueText(value interface{}) string {
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprint(value)
 }
 
 // IsTimeout 判断错误是否为请求超时（网络层超时或 context 超时），
 // 便于调用方对 Get/Post 返回的错误做针对性处理。
+// 同时兼容 context.DeadlineExceeded：错误被第三方包装、错误链中断时也能识别。
 func IsTimeout(requestErr error) bool {
 	if requestErr == nil {
 		return false
+	}
+	if errors.Is(requestErr, context.DeadlineExceeded) {
+		return true
 	}
 	var netError net.Error
 	return errors.As(requestErr, &netError) && netError.Timeout()
 }
 
-// classifyError 把 client.Do 的错误整理成带上下文的错误
+// classifyError 把 client.Do 的错误整理成带上下文的错误。
+// 必须用 %w 保留错误链，否则调用方的 errors.Is / errors.As（含 IsTimeout）无法穿透到原始错误。
 func classifyError(requestErr error) error {
 	if IsTimeout(requestErr) {
-		return fmt.Errorf("请求 Http 超时: %v", requestErr)
+		return fmt.Errorf("请求 Http 超时: %w", requestErr)
 	}
-	return fmt.Errorf("http 响应错误: %v", requestErr)
+	return fmt.Errorf("http 响应错误: %w", requestErr)
 }
