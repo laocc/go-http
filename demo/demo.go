@@ -54,10 +54,10 @@ func GetWithQuery() error {
 		return requestErr
 	}
 	if response.IsWrong { // 状态码不在允许列表内（默认仅 200）
-		return fmt.Errorf("请求失败: %d %s", response.StatusCode, response.Html())
+		return fmt.Errorf("请求失败: %d %s", response.StatusCode, response.Html)
 	}
 	fmt.Println("状态码:", response.StatusCode, "耗时:", response.Used)
-	fmt.Println("响应原文:", response.Html())
+	fmt.Println("响应原文:", response.Html)
 	return nil
 }
 
@@ -100,7 +100,7 @@ func PostJSON() error {
 		return requestErr
 	}
 	if response.IsWrong {
-		return fmt.Errorf("状态码异常: %d %s", response.StatusCode, response.Html())
+		return fmt.Errorf("状态码异常: %d %s", response.StatusCode, response.Html)
 	}
 	var result struct {
 		JSON orderParams `json:"json"`
@@ -213,7 +213,7 @@ func PostWithAllowStatus() error {
 		return requestErr
 	}
 	if response.IsWrong { // 200 与 204 都算正常，其余码才为 true
-		return fmt.Errorf("状态异常: %d %s", response.StatusCode, response.Html())
+		return fmt.Errorf("状态异常: %d %s", response.StatusCode, response.Html)
 	}
 	fmt.Println("204 被视为正常，IsWrong =", response.IsWrong)
 	return nil

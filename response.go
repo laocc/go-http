@@ -14,17 +14,19 @@ import (
 // Response 一次 HTTP 请求的完整响应。
 // Body 是读取完成的响应体原文，已自动关闭底层连接。
 type Response struct {
-	IsWrong    bool          // 响应是否异常：状态码不在允许列表内为 true（默认只允许 200，见 Allow 选项）
-	RemoteIP   string        // 目标服务器的 IP（由 httptrace 捕获，连接复用时也有；DNS 失败等未连通场景为空）
-	StatusCode int           // HTTP 状态码，200 表示正常
-	Status     string        // 状态文本，如 "200 OK"
-	Header     http.Header   // 响应头
-	Body       []byte        // 响应体原文
-	Decode     string        // 响应体解析方式：DecodeJSON / DecodeXML（由请求选项 Decode 或响应头推断）
-	Start      int64         // 请求开始时间（Unix 毫秒）
-	Used       time.Duration // 请求耗时
-
-	allowCodes map[int]bool // 视为「正常」的状态码（默认含 200，可用 Allow 追加），由请求配置带入
+	IsWrong    bool                // 响应是否异常：状态码不在允许列表内为 true（默认只允许 200，见 Allow 选项）
+	Url        string              // 目标 URL
+	Method     string              // 请求方式，post get
+	ReqHeaders map[string][]string //发送出去的请求头
+	StatusCode int                 // HTTP 状态码，200 表示正常
+	Status     string              // 状态文本，如 "200 OK"
+	Header     http.Header         // 收到的响应头
+	Body       []byte              // 响应体原文
+	Decode     string              // 响应体解析方式：DecodeJSON / DecodeXML（由请求选项 Decode 或响应头推断）
+	Start      int64               // 请求开始时间（Unix 毫秒）
+	Used       time.Duration       // 请求耗时
+	RemoteIP   string              // 目标服务器的 IP（由 httptrace 捕获，连接复用时也有；DNS 失败等未连通场景为空）
+	allowCodes map[int]bool        // 视为「正常」的状态码（默认含 200，可用 Allow 追加），由请求配置带入
 }
 
 // allow 判断状态码是否在允许列表内；列表为空（如手工构造的 Response）时按默认只允许 200。
@@ -33,6 +35,56 @@ func (resp *Response) allow(statusCode int) bool {
 		return statusCode == StatusOK
 	}
 	return resp.allowCodes[statusCode]
+}
+
+// DebugInfo 把本次响应序列化成分行缩进的 JSON 文本，可直接落日志。
+func (resp *Response) DebugInfo() string {
+	if resp == nil {
+		return ""
+	}
+	view := struct {
+		IsWrong    bool                `json:"isWrong"`
+		Method     string              `json:"method,omitempty"`
+		Url        string              `json:"url,omitempty"`
+		RemoteIP   string              `json:"remoteIP,omitempty"`
+		StatusCode int                 `json:"statusCode"`
+		Status     string              `json:"status,omitempty"`
+		ReqHeaders map[string][]string `json:"headers,omitempty"`
+		Header     map[string][]string `json:"header,omitempty"`
+		Body       string              `json:"body,omitempty"`
+		BodySize   int                 `json:"bodySize,omitempty"`
+		Decode     string              `json:"decode,omitempty"`
+		Start      string              `json:"start,omitempty"`
+		Used       string              `json:"used,omitempty"`
+	}{
+		IsWrong:    resp.IsWrong,
+		Method:     resp.Method,
+		Url:        resp.Url,
+		RemoteIP:   resp.RemoteIP,
+		StatusCode: resp.StatusCode,
+		Status:     resp.Status,
+		ReqHeaders: resp.ReqHeaders,
+		Header:     resp.Header,
+		Body:       string(resp.Body),
+		BodySize:   len(resp.Body),
+		Decode:     resp.Decode,
+	}
+	if resp.Start > 0 {
+		view.Start = time.UnixMilli(resp.Start).Format("2006-01-02 15:04:05.000000")
+	}
+	if resp.Used > 0 {
+		view.Used = resp.Used.String()
+	}
+
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)  // 不转义 < > &，与 PHP json_encode 行为一致
+	encoder.SetIndent("", "    ") // 4 空格缩进，分行输出
+	if encodeErr := encoder.Encode(view); encodeErr != nil {
+		return ""
+	}
+	// Encode 会在末尾补一个换行，去掉它，由调用方决定要不要换行
+	return strings.TrimRight(buffer.String(), "\n")
 }
 
 // Html 返回响应体文本

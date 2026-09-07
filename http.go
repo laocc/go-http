@@ -126,7 +126,7 @@ func (info *requestInfo) withResponse(result *Response) *requestInfo {
 	info.RemoteIP = result.RemoteIP
 	info.StatusCode = result.StatusCode
 	info.ResponseHeader = headerJSON(result.Header)
-	info.RawResponse = result.Html() // 原始响应内容（[]byte 直接 JSON 会变 base64，这里按文本记）
+	info.RawResponse = result.Html // 原始响应内容（[]byte 直接 JSON 会变 base64，这里按文本记）
 	info.Used = result.Used.String()
 	return info
 }
@@ -222,6 +222,7 @@ func doRequest(method string, rawURL string, optionList ...Option) (*Response, e
 		}
 		parsedURL.RawQuery = queryValues.Encode()
 	}
+	reqUrl := parsedURL.String()
 
 	// 2. 超时控制（通过 context，不替换共享 client，连接池仍可复用）
 	if cfg.timeout > 0 {
@@ -249,10 +250,10 @@ func doRequest(method string, rawURL string, optionList ...Option) (*Response, e
 	if len(cfg.body) > 0 {
 		requestBody = bytes.NewReader(cfg.body)
 	}
-	request, reqErr := http.NewRequestWithContext(requestContext, method, parsedURL.String(), requestBody)
+	request, reqErr := http.NewRequestWithContext(requestContext, method, reqUrl, requestBody)
 	if reqErr != nil {
 		requestErr := fmt.Errorf("创建请求失败: %v", reqErr)
-		cfg.record("HttpRequestError: 创建请求失败", newRequestInfo(method, parsedURL.String(), &cfg).withError(requestErr))
+		cfg.record("HttpRequestError: 创建请求失败", newRequestInfo(method, reqUrl, &cfg).withError(requestErr))
 		return nil, requestErr
 	}
 
@@ -277,7 +278,13 @@ func doRequest(method string, rawURL string, optionList ...Option) (*Response, e
 	if cfg.host != "" {
 		client = resolveClient(client, cfg.host, cfg.port)
 	}
-	result := &Response{Start: time.Now().UnixMilli(), allowCodes: cfg.allowCodes}
+	result := &Response{
+		Start:      time.Now().UnixMilli(),
+		allowCodes: cfg.allowCodes,
+		Url:        reqUrl,
+		Method:     method,
+		ReqHeaders: request.Header,
+	}
 	response, doErr := client.Do(request)
 	result.Used = time.Since(time.UnixMilli(result.Start))
 	if connectedIP, hasIP := remoteIP.Load().(string); hasIP {
@@ -296,7 +303,7 @@ func doRequest(method string, rawURL string, optionList ...Option) (*Response, e
 			}
 		}
 		requestErr := classifyError(doErr)
-		cfg.record("HttpRequestError: 请求发送失败", newRequestInfo(method, parsedURL.String(), &cfg).withResponse(result).withError(requestErr))
+		cfg.record("HttpRequestError: 请求发送失败", newRequestInfo(method, reqUrl, &cfg).withResponse(result).withError(requestErr))
 		return result, requestErr
 	}
 	// 正常路径：响应体读完后即关闭，Response.Body 是已读完的字节，调用方无需再关。
@@ -319,13 +326,14 @@ func doRequest(method string, rawURL string, optionList ...Option) (*Response, e
 	bodyBytes, readErr := io.ReadAll(response.Body)
 	if readErr != nil {
 		requestErr := fmt.Errorf("读取响应失败: %v", readErr)
-		cfg.record("HttpRequestError: 读取响应失败", newRequestInfo(method, parsedURL.String(), &cfg).withResponse(result).withError(requestErr))
+		cfg.record("HttpRequestError: 读取响应失败", newRequestInfo(method, reqUrl, &cfg).withResponse(result).withError(requestErr))
 		return result, requestErr
 	}
 	result.Body = bodyBytes
+	result.Html = string(bodyBytes)
 
 	// 完整信息：请求（URL/请求头/发送的数据）+ 响应（状态码/响应头/原始响应内容/耗时）
-	cfg.record("HttpResponse", newRequestInfo(method, parsedURL.String(), &cfg).withResponse(result))
+	cfg.record("HttpResponse", newRequestInfo(method, reqUrl, &cfg).withResponse(result))
 
 	return result, nil
 }

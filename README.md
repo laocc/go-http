@@ -49,7 +49,7 @@ if requestErr != nil {
 return requestErr
 }
 if response.IsWrong { // 状态码不在允许列表内（默认仅 200）即为异常
-return fmt.Errorf("接口异常: %d %s", response.StatusCode, response.Html())
+return fmt.Errorf("接口异常: %d %s", response.StatusCode, response.Html)
 }
 
 // 反序列化响应体
@@ -93,9 +93,10 @@ _ = response.Json(&result)
 |-------------------------|----------------------------|
 | `StatusCode` / `Status` | 状态码与状态文本                   |
 | `IsWrong`               | 状态码是否异常（不在允许列表内）           |
-| `Body` / `Html()`       | 响应体原文（`[]byte` / `string`） |
+| `Body` / `Html`         | 响应体原文（`[]byte` / `string`） |
 | `Json(target)`          | 按推断方式（JSON / XML）反序列化到结构体  |
 | `Xml(target)`           | 强制按 XML 反序列化               |
+| `DebugInfo()`           | 整个响应的分行 JSON 文本，可直接落日志   |
 | `Header`                | 响应头                        |
 | `RemoteIP`              | 目标服务器实际 IP（httptrace 捕获）   |
 | `Used`                  | 请求耗时                       |
