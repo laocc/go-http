@@ -281,10 +281,10 @@ func PostWithCustomClient() error {
 func ClientWithConnPool() error {
 	client := req.NewClient().
 		DialTimeout(10 * time.Second). // 建立 TCP 连接的超时
-		KeepAlive(30 * time.Second). // TCP 保活探测间隔
+		KeepAlive(30 * time.Second).   // TCP 保活探测间隔
 		TLSHandshakeTimeout(10 * time.Second).
 		ExpectContinueTimeout(1 * time.Second).
-		MaxIdleConns(200). // 连接池总上限
+		MaxIdleConns(200).       // 连接池总上限
 		MaxIdleConnsPerHost(50). // 单个域名的空闲连接上限（标准库默认仅 2）
 		IdleConnTimeout(90 * time.Second).
 		HTTP2(true) // 显式开启 HTTP/2
@@ -405,11 +405,11 @@ func ClientWithMutualTLS() error {
 func ClientWithTransportPolicy() error {
 	client := req.NewClient().
 		DialTimeout(5 * time.Second).
-		TLSHandshakeTimeout(5 * time.Second). // TLS 握手超时
+		TLSHandshakeTimeout(5 * time.Second).    // TLS 握手超时
 		ResponseHeaderTimeout(10 * time.Second). // 发出请求到收到响应头（不含读取响应体）
 		IdleConnTimeout(60 * time.Second).
 		UseCookieJar(). // 自动维护 Cookie，适合需要登录态的接口
-		NoRedirect() // 不跟随重定向，直接拿到 30x
+		NoRedirect()    // 不跟随重定向，直接拿到 30x
 	if client.Err() != nil {
 		return client.Err()
 	}
@@ -454,18 +454,18 @@ func ClientAsGlobalDefault() error {
 func ClientFullOptions() error {
 	client := req.NewClient().
 		// ===== 代理 =====
-		Proxy("http://127.0.0.1:7890"). // 固定代理；ProxyEnv 跟随环境变量；ProxyFunc 自定义
+		Proxy("http://127.0.0.1:7890").        // 固定代理；ProxyEnv 跟随环境变量；ProxyFunc 自定义
 		ProxyConnectHeader(proxyAuthHeader()). // 仅对 HTTPS 的 CONNECT 请求生效（HTTP 明文请求不带）
 		// ===== 建连 =====
 		DialTimeout(10 * time.Second). // 建立 TCP 连接的超时（DNS 之后）
-		KeepAlive(30 * time.Second). // 保活探测间隔
+		KeepAlive(30 * time.Second).   // 保活探测间隔
 		// ===== TLS（证书校验、最低版本、客户端证书等）=====
 		TLSConfig(&tls.Config{MinVersion: tls.VersionTLS12}). // 生产环境建议不低于 1.2
 		TLSHandshakeTimeout(10 * time.Second).
 		// ===== 连接池 =====
-		MaxIdleConns(500). // 全局空闲连接总数上限
+		MaxIdleConns(500).        // 全局空闲连接总数上限
 		MaxIdleConnsPerHost(100). // 单个域名的空闲连接上限（标准库默认仅 2）
-		MaxConnsPerHost(0). // 单域名连接总数上限（含正在使用），0 不限；给对端限流时用
+		MaxConnsPerHost(0).       // 单域名连接总数上限（含正在使用），0 不限；给对端限流时用
 		IdleConnTimeout(90 * time.Second).
 		DisableKeepAlives(false). // true = 每次请求新建连接（短连接），不建议
 		// ===== 超时与限制 =====
@@ -473,7 +473,7 @@ func ClientFullOptions() error {
 		ExpectContinueTimeout(1 * time.Second).
 		MaxResponseHeaderBytes(1 << 20). // 响应头最大字节数（此处 1MB）
 		// ===== 协议与缓冲区 =====
-		HTTP2(true). // 显式启用 HTTP/2
+		HTTP2(true).               // 显式启用 HTTP/2
 		DisableCompression(false). // true = 不自动解压 gzip（自行处理，省一次解压开销）
 		WriteBufferSize(32 * 1024).
 		ReadBufferSize(32 * 1024)
