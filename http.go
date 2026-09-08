@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -87,6 +88,25 @@ func ipFromAddr(addr net.Addr) string {
 	return host
 }
 
+// portFromAddr 从 "1.2.3.4:443" 形式的地址里取出端口；拿不到时返回 0。
+func portFromAddr(addr net.Addr) int {
+	if addr == nil {
+		return 0
+	}
+	if tcpAddr, isTCPAddr := addr.(*net.TCPAddr); isTCPAddr {
+		return tcpAddr.Port
+	}
+	_, portText, splitErr := net.SplitHostPort(addr.String())
+	if splitErr != nil {
+		return 0
+	}
+	port, atoiErr := strconv.Atoi(portText)
+	if atoiErr != nil {
+		return 0
+	}
+	return port
+}
+
 // doRequest 发起一次 HTTP 请求（通用出口，Get/Post 均为它的便捷封装）。
 // method 为 GET/POST/PUT/DELETE 等；rawURL 可直接携带 QueryString。
 // 返回 *Response（出错时也可能有值，含已解析的状态），以及可能发生的错误：
@@ -146,14 +166,16 @@ func doRequest(method string, rawURL string, optionList ...Option) *Response {
 		method = http.MethodGet
 	}
 
-	// 3. 创建请求（挂上 httptrace，捕获本次连接对端的 IP；连接复用时也会回调 GotConn）
+	// 3. 创建请求（挂上 httptrace，捕获本次连接对端的 IP 与端口；连接复用时也会回调 GotConn）
 	var remoteIP atomic.Value
+	var remotePort atomic.Value
 	requestContext := httptrace.WithClientTrace(cfg.ctx, &httptrace.ClientTrace{
 		GotConn: func(connInfo httptrace.GotConnInfo) {
 			if connInfo.Conn == nil {
 				return
 			}
 			remoteIP.Store(ipFromAddr(connInfo.Conn.RemoteAddr()))
+			remotePort.Store(portFromAddr(connInfo.Conn.RemoteAddr()))
 		},
 	})
 
@@ -196,10 +218,17 @@ func doRequest(method string, rawURL string, optionList ...Option) *Response {
 		Method:     method,
 		ReqHeaders: request.Header,
 	}
+	// 带请求体的请求（如 POST）把发送的原文记下来，便于日志排查
+	if len(cfg.body) > 0 {
+		result.Data = string(cfg.body)
+	}
 	response, doErr := requestClient.Do(request)
 	result.Used = time.Since(time.UnixMilli(result.Start))
 	if connectedIP, hasIP := remoteIP.Load().(string); hasIP {
 		result.RemoteIP = connectedIP
+	}
+	if connectedPort, hasPort := remotePort.Load().(int); hasPort {
+		result.RemotePort = int64(connectedPort)
 	}
 	if doErr != nil {
 		// 少数场景（重定向被拒、读取响应时出错等）会同时返回响应与错误，

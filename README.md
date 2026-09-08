@@ -97,10 +97,12 @@ _ = response.Json(&result)
 | `Method` / `Url`        | 请求方式与最终请求的 URL             |
 | `ReqHeaders`            | 实际发送出去的请求头                  |
 | `ResHeaders`            | 收到的响应头                      |
+| `Data`                  | 发送的原文（POST 等带请求体的请求才有）      |
 | `Body` / `Html()`       | 响应体原文（`[]byte` / `string`） |
 | `Json(target)`          | 按推断方式（JSON / XML）反序列化到结构体  |
 | `Xml(target)`           | 强制按 XML 反序列化               |
 | `RemoteIP`              | 目标服务器实际 IP（httptrace 捕获）   |
+| `RemotePort`            | 目标服务器端口（httptrace 捕获）       |
 | `Start`                 | 请求开始时间（Unix 毫秒）             |
 | `Used`                  | 请求耗时                       |
 | `DebugInfo()`           | 整个响应的分行 JSON 文本，可直接落日志     |

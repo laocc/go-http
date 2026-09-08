@@ -22,11 +22,13 @@ type Response struct {
 	StatusCode int                 // HTTP 状态码，200 表示正常
 	Status     string              // 状态文本，如 "200 OK"
 	ResHeaders http.Header         // 收到的响应头
+	Data       string              // 发送的原文
 	Body       []byte              // 响应体原文
 	Decode     string              // 响应体解析方式：DecodeJSON / DecodeXML（由请求选项 Decode 或响应头推断）
 	Start      int64               // 请求开始时间（Unix 毫秒）
 	Used       time.Duration       // 请求耗时
 	RemoteIP   string              // 目标服务器的 IP（由 httptrace 捕获，连接复用时也有；DNS 失败等未连通场景为空）
+	RemotePort int64               // 目标服务器的 端口
 	allowCodes map[int]bool        // 视为「正常」的状态码（默认含 200，可用 Allow 追加），由请求配置带入
 }
 
@@ -68,10 +70,12 @@ func (resp *Response) DebugInfo() string {
 		Method     string            `json:"method,omitempty"`
 		Url        string            `json:"url,omitempty"`
 		RemoteIP   string            `json:"remoteIP,omitempty"`
+		RemotePort int64             `json:"remotePort,omitempty"`
 		StatusCode int               `json:"statusCode"`
 		Status     string            `json:"status,omitempty"`
 		ReqHeaders map[string]string `json:"reqHeaders,omitempty"`
 		ResHeaders map[string]string `json:"resHeaders,omitempty"`
+		Data       string            `json:"data,omitempty"` // 发送的原文（POST 等带请求体的请求）
 		Body       string            `json:"body,omitempty"`
 		BodySize   int               `json:"bodySize,omitempty"`
 		Decode     string            `json:"decode,omitempty"`
@@ -83,10 +87,12 @@ func (resp *Response) DebugInfo() string {
 		Method:     resp.Method,
 		Url:        resp.Url,
 		RemoteIP:   resp.RemoteIP,
+		RemotePort: resp.RemotePort,
 		StatusCode: resp.StatusCode,
 		Status:     resp.Status,
 		ReqHeaders: headerToMap(resp.ReqHeaders),
 		ResHeaders: headerToMap(resp.ResHeaders),
+		Data:       resp.Data,
 		Body:       string(resp.Body),
 		BodySize:   len(resp.Body),
 		Decode:     resp.Decode,
