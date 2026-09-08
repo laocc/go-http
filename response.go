@@ -38,26 +38,46 @@ func (resp *Response) allow(statusCode int) bool {
 	return resp.allowCodes[statusCode]
 }
 
+// headerToMap 把 map[string][]string 形式的请求头/响应头压平成 map[string]string，便于日志阅读：
+// 单个值直接取该值；多个值按 HTTP 惯例用 ", " 拼接；没有值则跳过该键。
+func headerToMap(header map[string][]string) map[string]string {
+	if len(header) == 0 {
+		return nil
+	}
+	flatHeader := make(map[string]string, len(header))
+	for name, values := range header {
+		switch len(values) {
+		case 0:
+			continue
+		case 1:
+			flatHeader[name] = values[0]
+		default:
+			flatHeader[name] = strings.Join(values, ", ")
+		}
+	}
+	return flatHeader
+}
+
 // DebugInfo 把本次响应序列化成分行缩进的 JSON 文本，可直接落日志。
 func (resp *Response) DebugInfo() string {
 	if resp == nil {
 		return ""
 	}
 	view := struct {
-		IsWrong    bool                `json:"isWrong"`
-		Method     string              `json:"method,omitempty"`
-		Url        string              `json:"url,omitempty"`
-		RemoteIP   string              `json:"remoteIP,omitempty"`
-		StatusCode int                 `json:"statusCode"`
-		Status     string              `json:"status,omitempty"`
-		ReqHeaders map[string][]string `json:"reqHeaders,omitempty"`
-		ResHeaders map[string][]string `json:"resHeaders,omitempty"`
-		Body       string              `json:"body,omitempty"`
-		BodySize   int                 `json:"bodySize,omitempty"`
-		Decode     string              `json:"decode,omitempty"`
-		Start      string              `json:"start,omitempty"`
-		Used       string              `json:"used,omitempty"`
-		UsedMs     int64               `json:"usedMs,omitempty"`
+		IsWrong    bool              `json:"isWrong"`
+		Method     string            `json:"method,omitempty"`
+		Url        string            `json:"url,omitempty"`
+		RemoteIP   string            `json:"remoteIP,omitempty"`
+		StatusCode int               `json:"statusCode"`
+		Status     string            `json:"status,omitempty"`
+		ReqHeaders map[string]string `json:"reqHeaders,omitempty"`
+		ResHeaders map[string]string `json:"resHeaders,omitempty"`
+		Body       string            `json:"body,omitempty"`
+		BodySize   int               `json:"bodySize,omitempty"`
+		Decode     string            `json:"decode,omitempty"`
+		Start      string            `json:"start,omitempty"`
+		Used       string            `json:"used,omitempty"`
+		UsedMs     int64             `json:"usedMs,omitempty"`
 	}{
 		IsWrong:    resp.IsWrong,
 		Method:     resp.Method,
@@ -65,8 +85,8 @@ func (resp *Response) DebugInfo() string {
 		RemoteIP:   resp.RemoteIP,
 		StatusCode: resp.StatusCode,
 		Status:     resp.Status,
-		ReqHeaders: resp.ReqHeaders,
-		ResHeaders: resp.ResHeaders,
+		ReqHeaders: headerToMap(resp.ReqHeaders),
+		ResHeaders: headerToMap(resp.ResHeaders),
 		Body:       string(resp.Body),
 		BodySize:   len(resp.Body),
 		Decode:     resp.Decode,

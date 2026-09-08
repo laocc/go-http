@@ -7,17 +7,10 @@ import (
 	req "github.com/laocc/go-http"
 )
 
-const demoURL2 = "https://httpbin.org"
-
-func main() {
-	_ = ClientTuned()
-
-}
-
 // ClientDefault 开箱即用：NewClient 已预置常用默认配置，大多数环境直接发请求即可。
 // 默认包含：跟随环境代理、建连超时 30s、TLS 最低 1.2、连接池 100/100、空闲 90s、响应头等待 30s、开启 HTTP/2。
 func ClientDefault() error {
-	response := req.Get(demoURL2+"/get", req.WithClient(req.NewClient()))
+	response := req.Get(demoURL+"/get", req.WithClient(req.NewClient()))
 	if response.Error != nil {
 		return response.Error
 	}
@@ -36,7 +29,7 @@ func ClientTuned() error {
 		IdleConnTimeout(45 * time.Second). // 小于服务端 keepalive 超时
 		DialTimeout(5 * time.Second)       // 内网接口可缩短建连超时
 
-	response := req.Get(demoURL2+"/get", req.WithClient(client))
+	response := req.Get(demoURL+"/get", req.WithClient(client))
 	if response.Error != nil {
 		return response.Error
 	}
@@ -48,7 +41,7 @@ func ClientTuned() error {
 // 注意 ResponseHeaderTimeout 只作用于「发完请求到收到响应头」，不影响读取响应体的时间。
 func ClientLongWait() error {
 	client := req.NewClient().ResponseHeaderTimeout(0) // 需要多久都等
-	response := req.Get(demoURL2+"/delay/2",
+	response := req.Get(demoURL+"/delay/2",
 		req.WithClient(client),
 		req.Timeout(30*time.Second), // 整体超时仍由 Timeout 选项控制
 	)
@@ -72,7 +65,7 @@ func ClientBuildOnce() error {
 	fmt.Println("改动配置后，Build 重建实例:", rebuiltClient != firstClient)
 
 	// 实际发请求时也是复用同一个实例，连接池得以共享
-	response := req.Get(demoURL2+"/get", req.WithClient(client))
+	response := req.Get(demoURL+"/get", req.WithClient(client))
 	if response.Error != nil {
 		return response.Error
 	}
@@ -87,7 +80,7 @@ func ClientBuildOnce() error {
 func ClientDefaultGlobal() error {
 	req.DefaultClient = req.NewClient().MaxIdleConnsPerHost(50)
 
-	response := req.Get(demoURL2 + "/get") // 无需再传 WithClient
+	response := req.Get(demoURL + "/get") // 无需再传 WithClient
 	if response.Error != nil {
 		return response.Error
 	}
